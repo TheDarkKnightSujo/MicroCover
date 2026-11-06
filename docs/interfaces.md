@@ -1,0 +1,89 @@
+# Shared interfaces — Phase 1 and proposed extensions
+
+Phase 1 extends the original Studio foundation in the same project. Human initiated Studio deployment to Arc Testnet at `0xff679b65c1d09e8d49fb18bb656f4509b33af9a0`; runtime bytecode matches the reviewed local build exactly with the USDC immutable populated. Verification: `docs/evidence/phase1-deployment.json`. Later lifecycle/evidence sections remain proposals. Record accepted changes in decisions.md and update consumers together.
+
+## Phase 1 API and accounting
+
+The original `createGuarantee` signature and Guarantee terms tuple are preserved. `joinCohort` remains one enrollment/account/guarantee, excludes the provider and is permitted through the join deadline inclusive, while OPEN and within guarantee-local capacity. The full bond is compensation times maximum cohort; the full beneficiary payment is escrow. `settlementTime` and opaque `termsHash` are frozen metadata, not a release authorization or implemented evidence policy.
+
+| Function | Authority / effect |
+|---|---|
+| `admitFailure(uint256 id)` | Only that guarantee's provider, once while OPEN; closes enrollment, stores FAILURE verdict and admission timestamp, moves no funds. No time gate. |
+| `settleFailure(uint256 id, uint32 maxBeneficiaries) returns (uint32 settled)` | Permissionless after admission; batch 1–20, derives next enrollment-order recipients and fixed escrow + compensation from state. No external payout list. Whole batch reverts on transfer failure or incorrect amount; repeat payout rejected. |
+| `withdrawRemainingBond(uint256 id) returns (uint256 amount)` | Only provider after failure and all enrolled liabilities paid, reserved compensation zero; derives unused bond, transfers only to provider, closes guarantee. No OPEN withdrawal. Zero enrollment can withdraw the entire admitted-failure bond. |
+| `getState(uint256 id)` | Returns snapshot described below; unknown IDs revert. |
+| `statusOf`, `outcomeOf` | Existing-ID lifecycle and explicit verdict, retained after payouts/closure; unknown IDs revert. |
+| `beneficiaryCount`, `beneficiaryAt`, `getBeneficiaries`, `isPaid` | Enrollment order and payout flags. List bounded by 100; out-of-range index reverts. Unknown count/list/paid return 0/empty/false. |
+| `reservedOf` | Unpaid compensation liability, a subset of `bondOf`, never added to bond a second time. Unknown IDs return zero. |
+
+`Status`: OPEN=0, FAILED=1, CLOSED=2. `Outcome`: NONE=0, FAILURE=1. Full cohorts close automatically on the last successful payout; partial/empty cohorts stay FAILED until unused bond withdrawal. There is no success, evaluation, uncertain or CRE state in this enum. Never reuse proposed later-phase enum numbers as deployed ABI values.
+
+`getState` tuple order: `(uint8 status, uint8 outcome, uint32 enrolled, uint32 paidCount, uint32 openSlots, uint64 failureAdmittedAt, uint256 bondHeld, uint256 reservedCompensation, uint256 escrowHeld, uint256 paidCompensation, uint256 paidEscrow, uint256 withdrawableBond, uint256 remainingOwed)`. `openSlots` measures OPEN ledger capacity; consult `isJoinable` for deadline eligibility. `withdrawableBond` is zero until FAILED and all enrolled beneficiaries are paid.
+
+Per-guarantee conservation: `bondOf + paidCompensation + withdrawnBond = compensation * maxCohort`; `escrowedOf + paidEscrow = escrowAmount * cohortSize`; `reservedOf + paidCompensation = compensation * cohortSize`. Global token assets cover the sum of each guarantee's held bond plus escrow. Donations are extra assets, never capacity or withdrawable funds. Exact inbound receipts, outbound contract debits and recipient gains are checked. Token failures revert accounting and earlier transfers within the same transaction.
+
+New events: `FailureAdmitted(id, provider, enrolled, totalOwed)`, `BeneficiaryPaid(id, beneficiary, escrowReturned, compensationPaid)`, `SettlementBatchProcessed(id, caller, settled, paidCount, enrolled)`, `GuaranteeClosed(id)`, `RemainingBondWithdrawn(id, provider, amount)`. ID and relevant account fields are indexed in source. Custom errors identify authorization, state, batch, accounting and recipient receipt failures; UI decodes the ABI rather than inferring success from submitted hashes.
+
+UI uses the same public contract-address variable, official Arc Testnet and six-decimal token helpers. It waits for mined receipt success and shows cancellation/revert/error separately. Complete reads are required before dependent actions; RPC failure is unavailable, only decoded `UnknownGuarantee` means unknown ID. Contract/id/account action keys reset irreversible confirmation state. These are local implementation behaviors; real-wallet flows remain manual checkpoint checks.
+
+## Historical Phase 0 foundation (superseded by Phase 1 source)
+
+- `createGuarantee(uint128 compensation, uint128 escrowAmount, uint32 maxCohort, uint64 joinDeadline, uint64 settlementTime, bytes32 termsHash) returns (uint256 id)` pulls `compensation * maxCohort` as the provider bond.
+- `joinCohort(uint256 id)` pulls the fixed escrow amount from the joining beneficiary. One enrollment/account/guarantee, provider cannot enroll, contract maximum 100, guarantee-specific cap enforced. Enrollment at exactly `joinDeadline` is currently permitted; after it is rejected.
+- Views: `getGuarantee`, `isMember`, `isJoinable`, `bondOf`, `escrowedOf`, `usdc`, `nextGuaranteeId`, `MAX_COHORT`.
+- Terms: provider, compensation, escrowAmount, maxCohort, cohortSize, joinDeadline, settlementTime, termsHash. Amounts are integer ERC-20 USDC base units (6 decimals). Stored terms have no update function.
+- Events: `GuaranteeCreated`, `CohortJoined`. Failures use Solidity custom errors, not a REST API error schema.
+- UI is read-only apart from wallet connection/network switching. No deployed address, settlement, release, verdict, evidence API or lifecycle state enum exists. `settlementTime` currently validates creation terms; it authorizes no fund release.
+- Selected synthetic demo: three beneficiaries, 2 USDC escrow each, 5 USDC compensation each, bond 15, total locked 21 if fully enrolled. The user delegated the choice on 6 November 2026; existing Studio amounts were retained and older notes reconciled. This is a demo configuration, not a protocol-wide fixed price.
+
+## Core entities
+
+| Entity | Required concepts |
+|---|---|
+| Guarantee | ID, provider, condition/template, policy version, token, price, escrow share, compensation, enrollment cutoff, outcome deadline, finality window, evidence policy, cohort cap, status |
+| Cohort | Guarantee/common trigger, enrolled beneficiaries, outcome; no unrelated bookings grouped together |
+| Enrollment | Guarantee ID, beneficiary, amount paid, escrow amount, reserved compensation, enrollment transaction, settled flag |
+| Evidence receipt | Entry ID, guarantee/cohort, source/group, source timestamp, receipt timestamp, schema version, payload hash, previous hash, authentication reference |
+| Verdict | Chain/domain, consumer contract, guarantee/cohort, outcome, reason, policy version, evidence root, coverage, fixed-policy support score, nonce/expiry as supported |
+
+Use generic provider/beneficiary names. One beneficiary per account per guarantee is the proposed demo limit; multiple tickets/account is deferred. Terms cannot be changed retroactively after enrollment.
+
+## Financial policy
+
+- Official Arc testnet USDC, integer ERC-20 units; verify address/decimals against current docs during setup.
+- One isolated bond per guarantee/cohort for MVP.
+- slotsAvailable = floor((bond - reservedCompensation) / compensationPerBeneficiary), subject to the explicit demo cap. Reject compensation <= 0 in this version.
+- Guaranteed portion stays in escrow; non-guaranteed portion goes to provider.
+- Failure pays escrow refund + fixed compensation exactly once to each enrolled beneficiary.
+- Success releases escrow only after the configured finality/claim condition; bond withdrawal also respects all active liabilities/windows.
+- Contract token balance must cover the sum of all outstanding escrow, reserved compensation and other withdrawable obligations. Do not double-count ledger entries in the invariant.
+- Bounded batch size must be tested. No unbounded cohort loop or claim of thousands of automatic transfers in the MVP.
+
+## Proposed states
+
+| State | Allowed behavior |
+|---|---|
+| OPEN | Enroll while before cutoff and within capacity; authorized admission can close/fail cohort |
+| EVALUATING | No new enrollment; evaluate bound evidence |
+| UNCERTAIN | No automatic compensation, release or bond unlock; documented restricted resolution path only |
+| FAILED | Terminal adverse verdict; settle each membership once, with payout completion tracked |
+| SUCCEEDED | Terminal favorable verdict; release/withdraw only when finality policy permits |
+| CLOSED | All required fund obligations settled; repeated operations rejected |
+
+Freeze exact transition timing and implementation enum names in Phase 0. Keep terminal verdict distinct from per-beneficiary payout completion. Reject FAILED-to-SUCCEEDED or reverse transitions.
+
+## Evidence policy
+
+A claim requests evaluation; it does not select outcome/amounts. Each template fixes approved sources, independence groups, freshness, coverage and threshold. Duplicated/syndicated sources do not create independence. An arbitrary AI confidence value does not authorize money movement. Outage/stale/insufficient evidence is UNCERTAIN. Missing attendance is not proof a concert was cancelled.
+
+Use canonical payload encoding and a documented hashing rule. Raw private payloads stay private. Onchain commitments prove matching history integrity, not source truth/completeness. New evidence entries append; corrections link to old entries.
+
+## Access and domains
+
+Provider alone admits its own failure. Beneficiaries may request evaluation. Settlement authority must be restricted and bound to guarantee, chain, contract and replay controls. During early phases, label restricted demo operator authority. CRE must use its actual supported report/consumer verification path; never leave test authorization exposed on the final deployment.
+
+## UI/API contracts to define after stack inspection
+
+Proposed capabilities: get guarantee; create/fund; enroll; request evaluation; admit fault; fetch evidence/status/history; settle/release under policy. These are capabilities, not prescribed REST routes. Freeze actual signatures/paths, error shapes, pagination and auth in Phase 0. Never return secrets or raw personal evidence in public endpoints.
+
+UI distinguishes pending transaction, confirmed outcome, payout completion, stale indexing, unavailable history and uncertain evidence. Arc is authoritative for money; Arkiv history is a read model.

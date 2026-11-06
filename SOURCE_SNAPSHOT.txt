@@ -1,0 +1,5 @@
+Private source commit: c6bd973b0cfca05ae2167984e19621a3899ca47a
+Release: first public snapshot, foundation plus completed Phase 1
+Implementation/operator: Abhiraj Kochale, with Arc Studio and Codex assistance; see docs/ai-usage.md
+Publication does not change implementation attribution. Genuine history is retained in the private repository.
+Included documentation describes observations at the private source commit; final public SHA is recorded afterward in the private release log.
